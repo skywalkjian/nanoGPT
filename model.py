@@ -26,6 +26,39 @@ class LayerNorm(nn.Module):
     def forward(self, input):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 
+class RMSNorm(nn.Module):
+    """Minimal RMSNorm used only inside Block Attention Residual aggregators."""
+
+    def __init__(self, ndim, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.eps = eps
+
+    def forward(self, input):
+        rms = input.pow(2).mean(dim=-1, keepdim=True)
+        input = input * torch.rsqrt(rms + self.eps)
+        return input * self.weight
+
+class BlockAttnRes(nn.Module):
+
+    def __init__(self, hidden_size, use_rmsnorm=True):
+        super().__init__()
+        self.weight = nn.Parameter(torch.zeros(hidden_size))
+        self.norm = RMSNorm(hidden_size) if use_rmsnorm else nn.Identity()
+
+    def forward(self, blocks, partial_block, return_scores=False):
+        if len(blocks) > 0:
+            values = torch.stack(blocks + [partial_block], dim=0)
+        else:
+            values = partial_block.unsqueeze(0)
+        keys = self.norm(values)
+        logits = torch.einsum('d, n b t d -> n b t', self.weight, keys)
+        scores = F.softmax(logits, dim=0)
+        hidden = torch.einsum('n b t, n b t d -> b t d', scores, values)
+        if return_scores:
+            return hidden, scores
+        return hidden
+
 class CausalSelfAttention(nn.Module):
 
     def __init__(self, config):
@@ -93,17 +126,75 @@ class MLP(nn.Module):
 
 class Block(nn.Module):
 
-    def __init__(self, config):
+    def __init__(self, config, layer_idx):
         super().__init__()
+        self.layer_idx = layer_idx
+        self.use_block_attention_residuals = config.use_block_attention_residuals
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
         self.mlp = MLP(config)
+        if self.use_block_attention_residuals:
+            self.layers_per_block = config.n_layer // config.attn_res_num_blocks
+            self.attn_res_agg = BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
+            self.mlp_res_agg = BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
 
-    def forward(self, x):
-        x = x + self.attn(self.ln_1(x))
-        x = x + self.mlp(self.ln_2(x))
-        return x
+    def _bar_norm(self, x):
+        return x.detach().float().norm(dim=-1).mean().item()
+
+    def forward(self, x, blocks=None, collect_bar_stats=False):
+        if not self.use_block_attention_residuals:
+            x = x + self.attn(self.ln_1(x))
+            x = x + self.mlp(self.ln_2(x))
+            if collect_bar_stats:
+                stats = {
+                    'layer_idx': self.layer_idx,
+                    'mode': 'baseline',
+                    'output_norm': self._bar_norm(x),
+                }
+                return x, blocks, stats
+            return x
+
+        if blocks is None:
+            blocks = []
+
+        stats = {'layer_idx': self.layer_idx} if collect_bar_stats else None
+        partial_block = x
+        if collect_bar_stats:
+            stats['input_norm'] = self._bar_norm(partial_block)
+
+        if collect_bar_stats:
+            attn_hidden, attn_scores = self.attn_res_agg(blocks, partial_block, return_scores=True)
+            stats['attn_scores'] = attn_scores.detach().float().cpu()
+            stats['attn_agg_norm'] = self._bar_norm(attn_hidden)
+            stats['attn_depth'] = attn_scores.size(0)
+        else:
+            attn_hidden = self.attn_res_agg(blocks, partial_block)
+
+        if self.layer_idx % self.layers_per_block == 0:
+            blocks.append(partial_block)
+            partial_block = None
+
+        attn_out = self.attn(self.ln_1(attn_hidden))
+        partial_block = attn_out if partial_block is None else partial_block + attn_out
+        if collect_bar_stats:
+            stats['post_attn_norm'] = self._bar_norm(partial_block)
+
+        if collect_bar_stats:
+            mlp_hidden, mlp_scores = self.mlp_res_agg(blocks, partial_block, return_scores=True)
+            stats['mlp_scores'] = mlp_scores.detach().float().cpu()
+            stats['mlp_agg_norm'] = self._bar_norm(mlp_hidden)
+            stats['mlp_depth'] = mlp_scores.size(0)
+        else:
+            mlp_hidden = self.mlp_res_agg(blocks, partial_block)
+
+        mlp_out = self.mlp(self.ln_2(mlp_hidden))
+        partial_block = partial_block + mlp_out
+        if collect_bar_stats:
+            stats['output_norm'] = self._bar_norm(partial_block)
+            stats['num_committed_blocks'] = len(blocks)
+
+        return partial_block, blocks, stats
 
 @dataclass
 class GPTConfig:
@@ -114,6 +205,9 @@ class GPTConfig:
     n_embd: int = 768
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
+    use_block_attention_residuals: bool = False
+    attn_res_num_blocks: int = 3
+    attn_res_use_rmsnorm: bool = True
 
 class GPT(nn.Module):
 
@@ -122,12 +216,16 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        if config.use_block_attention_residuals and config.n_layer % config.attn_res_num_blocks != 0:
+            raise ValueError(
+                f"n_layer={config.n_layer} must be divisible by attn_res_num_blocks={config.attn_res_num_blocks}"
+            )
 
         self.transformer = nn.ModuleDict(dict(
             wte = nn.Embedding(config.vocab_size, config.n_embd),
             wpe = nn.Embedding(config.block_size, config.n_embd),
             drop = nn.Dropout(config.dropout),
-            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            h = nn.ModuleList([Block(config, layer_idx=i) for i in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
@@ -167,7 +265,7 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None):
+    def forward(self, idx, targets=None, return_bar_stats=False):
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
@@ -177,8 +275,34 @@ class GPT(nn.Module):
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (b, t, n_embd)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (t, n_embd)
         x = self.transformer.drop(tok_emb + pos_emb)
-        for block in self.transformer.h:
-            x = block(x)
+        aux = None
+        if self.config.use_block_attention_residuals:
+            blocks = []
+            block_stats = [] if return_bar_stats else None
+            for block in self.transformer.h:
+                x, blocks, stats = block(x, blocks=blocks, collect_bar_stats=return_bar_stats)
+                if return_bar_stats:
+                    block_stats.append(stats)
+            if return_bar_stats:
+                aux = {
+                    'mode': 'bar',
+                    'layers_per_block': self.config.n_layer // self.config.attn_res_num_blocks,
+                    'attn_res_num_blocks': self.config.attn_res_num_blocks,
+                    'block_stats': block_stats,
+                }
+        else:
+            block_stats = [] if return_bar_stats else None
+            for block in self.transformer.h:
+                if return_bar_stats:
+                    x, _, stats = block(x, collect_bar_stats=True)
+                    block_stats.append(stats)
+                else:
+                    x = block(x)
+            if return_bar_stats:
+                aux = {
+                    'mode': 'baseline',
+                    'block_stats': block_stats,
+                }
         x = self.transformer.ln_f(x)
 
         if targets is not None:
@@ -190,6 +314,8 @@ class GPT(nn.Module):
             logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
             loss = None
 
+        if return_bar_stats:
+            return logits, loss, aux
         return logits, loss
 
     def crop_block_size(self, block_size):

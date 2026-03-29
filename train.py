@@ -54,6 +54,9 @@ n_head = 12
 n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
+use_block_attention_residuals = False
+attn_res_num_blocks = 3
+attn_res_use_rmsnorm = True
 # adamw optimizer
 learning_rate = 6e-4 # max learning rate
 max_iters = 600000 # total number of training iterations
@@ -145,7 +148,10 @@ if os.path.exists(meta_path):
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
-                  bias=bias, vocab_size=None, dropout=dropout) # start with model_args from command line
+                  bias=bias, vocab_size=None, dropout=dropout,
+                  use_block_attention_residuals=use_block_attention_residuals,
+                  attn_res_num_blocks=attn_res_num_blocks,
+                  attn_res_use_rmsnorm=attn_res_use_rmsnorm) # start with model_args from command line
 if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
@@ -163,8 +169,19 @@ elif init_from == 'resume':
     checkpoint_model_args = checkpoint['model_args']
     # force these config attributes to be equal otherwise we can't even resume training
     # the rest of the attributes (e.g. dropout) can stay as desired from command line
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
-        model_args[k] = checkpoint_model_args[k]
+    resume_must_match = [
+        'n_layer',
+        'n_head',
+        'n_embd',
+        'block_size',
+        'bias',
+        'vocab_size',
+        'use_block_attention_residuals',
+        'attn_res_num_blocks',
+        'attn_res_use_rmsnorm',
+    ]
+    for k in resume_must_match:
+        model_args[k] = checkpoint_model_args.get(k, model_args[k])
     # create the model
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
@@ -180,11 +197,14 @@ elif init_from == 'resume':
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
+    if use_block_attention_residuals:
+        raise ValueError("init_from='gpt2*' does not support use_block_attention_residuals=True; use scratch or resume instead.")
     # initialize from OpenAI GPT-2 weights
     override_args = dict(dropout=dropout)
     model = GPT.from_pretrained(init_from, override_args)
     # read off the created config params, so we can store them into checkpoint correctly
-    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size']:
+    for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size',
+              'use_block_attention_residuals', 'attn_res_num_blocks', 'attn_res_use_rmsnorm']:
         model_args[k] = getattr(model.config, k)
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:
