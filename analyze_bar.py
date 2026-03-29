@@ -18,6 +18,11 @@ try:
 except ImportError as exc:
     raise SystemExit("matplotlib is required for analyze_bar.py. Install it with `pip install matplotlib`.") from exc
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Analyze Block Attention Residual checkpoints.")
@@ -30,6 +35,7 @@ def parse_args():
     parser.add_argument('--dtype', type=str, default='bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16')
     parser.add_argument('--seed', type=int, default=1337)
     parser.add_argument('--output_dir', type=str, default=None, help='Output directory for analysis artifacts.')
+    parser.add_argument('--use_tqdm', action=argparse.BooleanOptionalAction, default=True, help='Show tqdm progress bars if tqdm is installed.')
     return parser.parse_args()
 
 
@@ -227,6 +233,11 @@ def main():
     all_block_stats = []
     first_batch_stats = None
     losses = []
+    batch_pbar = None
+    if args.use_tqdm and tqdm is not None:
+        batch_pbar = tqdm(total=args.num_batches, desc='analyze', dynamic_ncols=True)
+    elif args.use_tqdm and tqdm is None:
+        print("WARNING: tqdm is not installed; continuing without progress bar. Install it with `pip install tqdm`.")
 
     with torch.no_grad():
         for batch_idx in range(args.num_batches):
@@ -237,6 +248,12 @@ def main():
             all_block_stats.append(aux['block_stats'])
             if batch_idx == 0:
                 first_batch_stats = aux['block_stats']
+            if batch_pbar is not None:
+                batch_pbar.update(1)
+                batch_pbar.set_postfix(loss=f"{losses[-1]:.4f}")
+
+    if batch_pbar is not None:
+        batch_pbar.close()
 
     attn_heatmap = scores_to_heatmap(first_batch_stats, 'attn_scores')
     mlp_heatmap = scores_to_heatmap(first_batch_stats, 'mlp_scores')

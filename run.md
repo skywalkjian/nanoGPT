@@ -96,10 +96,10 @@ python sample.py --out_dir=out-shakespeare-char-bar --start=$'\n' --num_samples=
 
 ## 6. BAR 分析
 
-先确保有画图库：
+先确保有画图库和进度条依赖：
 
 ```bash
-python -m pip install matplotlib
+python -m pip install matplotlib tqdm
 ```
 
 标准分析命令：

@@ -29,6 +29,11 @@ from torch.distributed import init_process_group, destroy_process_group
 
 from model import GPTConfig, GPT
 
+try:
+    from tqdm.auto import tqdm
+except ImportError:
+    tqdm = None
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -75,6 +80,7 @@ backend = 'nccl' # 'nccl', 'gloo', etc.
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
+use_tqdm = True # only used for single-card progress display
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -233,16 +239,23 @@ if ddp:
 
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
-def estimate_loss():
+def estimate_loss(show_progress=False):
     out = {}
     model.eval()
     for split in ['train', 'val']:
         losses = torch.zeros(eval_iters)
+        eval_pbar = None
+        if show_progress and tqdm is not None:
+            eval_pbar = tqdm(total=eval_iters, desc=f'eval:{split}', leave=False, dynamic_ncols=True)
         for k in range(eval_iters):
             X, Y = get_batch(split)
             with ctx:
                 logits, loss = model(X, Y)
             losses[k] = loss.item()
+            if eval_pbar is not None:
+                eval_pbar.update(1)
+        if eval_pbar is not None:
+            eval_pbar.close()
         out[split] = losses.mean()
     model.train()
     return out
@@ -266,6 +279,19 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+tqdm_enabled = use_tqdm and not ddp and master_process
+train_pbar = None
+if tqdm_enabled and tqdm is not None:
+    train_pbar = tqdm(total=max_iters + 1, initial=iter_num, desc='train', dynamic_ncols=True)
+elif tqdm_enabled and tqdm is None:
+    print("WARNING: tqdm is not installed; continuing without progress bar. Install it with `pip install tqdm`.")
+
+def log_message(message):
+    if train_pbar is not None:
+        train_pbar.write(message)
+    else:
+        print(message)
+
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
@@ -281,8 +307,8 @@ while True:
 
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
-        losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        losses = estimate_loss(show_progress=tqdm_enabled)
+        log_message(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
@@ -302,7 +328,7 @@ while True:
                     'best_val_loss': best_val_loss,
                     'config': config,
                 }
-                print(f"saving checkpoint to {out_dir}")
+                log_message(f"saving checkpoint to {out_dir}")
                 torch.save(checkpoint, os.path.join(out_dir, 'ckpt.pt'))
     if iter_num == 0 and eval_only:
         break
@@ -344,13 +370,21 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        if train_pbar is not None:
+            train_pbar.set_postfix(loss=f"{lossf:.4f}", lr=f"{lr:.2e}", mfu=f"{running_mfu*100:.2f}%")
+        else:
+            log_message(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
     iter_num += 1
     local_iter_num += 1
+    if train_pbar is not None:
+        train_pbar.update(1)
 
     # termination conditions
     if iter_num > max_iters:
         break
+
+if train_pbar is not None:
+    train_pbar.close()
 
 if ddp:
     destroy_process_group()
