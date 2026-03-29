@@ -173,10 +173,10 @@ class Block(nn.Module):
 
         if self.layer_idx % self.layers_per_block == 0:
             blocks.append(partial_block)
-            partial_block = None
+            #partial_block = None
 
         attn_out = self.attn(self.ln_1(attn_hidden))
-        partial_block = attn_out if partial_block is None else partial_block + attn_out
+        partial_block = partial_block + attn_out
         if collect_bar_stats:
             stats['post_attn_norm'] = self._bar_norm(partial_block)
 
