@@ -34,6 +34,11 @@ try:
 except ImportError:
     tqdm = None
 
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    SummaryWriter = None
+
 # -----------------------------------------------------------------------------
 # default config values designed to train a gpt2 (124M) on OpenWebText
 # I/O
@@ -48,6 +53,8 @@ init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
+tensorboard_log = False
+tensorboard_run_name = 'run'
 # data
 dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
@@ -279,6 +286,15 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+tb_writer = None
+if tensorboard_log and master_process:
+    if SummaryWriter is None:
+        print("WARNING: tensorboard is not installed; continuing without TensorBoard logging. Install it with `pip install tensorboard`.")
+    else:
+        tb_log_dir = os.path.join(out_dir, 'tensorboard', tensorboard_run_name)
+        tb_writer = SummaryWriter(log_dir=tb_log_dir)
+        tb_writer.add_text('config', '\n'.join(f'{k}: {v}' for k, v in sorted(config.items())))
+
 tqdm_enabled = use_tqdm and not ddp and master_process
 train_pbar = None
 if tqdm_enabled and tqdm is not None:
@@ -309,6 +325,11 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss(show_progress=tqdm_enabled)
         log_message(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        if tb_writer is not None:
+            tb_writer.add_scalar('eval/train_loss', losses['train'], iter_num)
+            tb_writer.add_scalar('eval/val_loss', losses['val'], iter_num)
+            tb_writer.add_scalar('eval/best_val_loss', min(best_val_loss, losses['val']), iter_num)
+            tb_writer.add_scalar('train/lr', lr, iter_num)
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
@@ -370,6 +391,12 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
+        if tb_writer is not None:
+            tb_writer.add_scalar('train/loss', lossf, iter_num)
+            tb_writer.add_scalar('train/lr', lr, iter_num)
+            tb_writer.add_scalar('perf/iter_ms', dt * 1000, iter_num)
+            if running_mfu >= 0:
+                tb_writer.add_scalar('perf/mfu', running_mfu * 100, iter_num)
         if train_pbar is not None:
             train_pbar.set_postfix(loss=f"{lossf:.4f}", lr=f"{lr:.2e}", mfu=f"{running_mfu*100:.2f}%")
         else:
@@ -385,6 +412,9 @@ while True:
 
 if train_pbar is not None:
     train_pbar.close()
+
+if tb_writer is not None:
+    tb_writer.close()
 
 if ddp:
     destroy_process_group()

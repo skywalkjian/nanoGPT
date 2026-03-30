@@ -10,6 +10,8 @@ always_save_checkpoint = False
 wandb_log = False
 wandb_project = 'shakespeare-char'
 wandb_run_name = 'mini-gpt-bar'
+tensorboard_log = True
+tensorboard_run_name = 'bar'
 
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1

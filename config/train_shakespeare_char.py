@@ -12,6 +12,8 @@ always_save_checkpoint = False
 wandb_log = False # override via command line if you like
 wandb_project = 'shakespeare-char'
 wandb_run_name = 'mini-gpt'
+tensorboard_log = True
+tensorboard_run_name = 'baseline'
 
 dataset = 'shakespeare_char'
 gradient_accumulation_steps = 1
