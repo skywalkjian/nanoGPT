@@ -6,8 +6,7 @@
 
 ## 0.data/env 准备
 运行 `python data/shakespeare_char/prepare.py`
-python -m pip install tensorboard
-python -m pip install matplotlib tqdm
+python -m pip install tensorboard matplotlib tqdm tiktoken
 ## 1. 推荐目录约定
 
 baseline 输出目录：
