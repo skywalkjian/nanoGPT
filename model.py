@@ -171,12 +171,14 @@ class Block(nn.Module):
         else:
             attn_hidden = self.attn_res_agg(blocks, partial_block)
 
-        if self.layer_idx % self.layers_per_block == 0:
+        # layer 0 only sees the embedding input, so it should not be treated
+        # as a completed historical block.
+        if self.layer_idx > 0 and self.layer_idx % self.layers_per_block == 0:
             blocks.append(partial_block)
-            #partial_block = None
+            partial_block = None
 
         attn_out = self.attn(self.ln_1(attn_hidden))
-        partial_block = partial_block + attn_out
+        partial_block = attn_out if partial_block is None else partial_block + attn_out
         if collect_bar_stats:
             stats['post_attn_norm'] = self._bar_norm(partial_block)
 
