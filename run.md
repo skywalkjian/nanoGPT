@@ -4,6 +4,10 @@
 
 说明：本文件只整理运行命令与建议输出约定。以下命令在这次交付中**没有真实执行**，用于你后续手动跑 baseline、BAR、采样和分析。
 
+## 0.data/env 准备
+运行 `python data/shakespeare_char/prepare.py`
+python -m pip install tensorboard
+python -m pip install matplotlib tqdm
 ## 1. 推荐目录约定
 
 baseline 输出目录：
@@ -30,6 +34,12 @@ out-shakespeare-char-bar/bar_analysis
 mkdir -p logs
 ```
 
+如果你想看 TensorBoard 曲线，额外安装：
+
+```bash
+python -m pip install tensorboard
+```
+
 ## 2. baseline 训练
 
 标准命令：
@@ -42,6 +52,12 @@ python train.py config/train_shakespeare_char.py
 
 ```bash
 python train.py config/train_shakespeare_char.py | tee logs/train_baseline.log
+```
+
+TensorBoard 默认会写到：
+
+```text
+out-shakespeare-char/tensorboard/baseline
 ```
 
 如果你机器较弱，可以先用 CPU/关闭 compile 做最小验证：
@@ -62,6 +78,12 @@ python train.py config/train_shakespeare_char_bar.py
 
 ```bash
 python train.py config/train_shakespeare_char_bar.py | tee logs/train_bar.log
+```
+
+TensorBoard 默认会写到：
+
+```text
+out-shakespeare-char-bar/tensorboard/bar
 ```
 
 如果你只想先确认 BAR 路径能启动：
@@ -148,7 +170,28 @@ python train.py config/train_shakespeare_char_bar.py --init_from=resume --out_di
 3. `python train.py config/train_shakespeare_char_bar.py`
 4. `python analyze_bar.py --out_dir=out-shakespeare-char-bar --dataset=shakespeare_char`
 
-## 9. 结果记录建议
+## 9. TensorBoard 查看
+
+同时看 baseline 和 BAR：
+
+```bash
+tensorboard --logdir_spec baseline:out-shakespeare-char/tensorboard/baseline,bar:out-shakespeare-char-bar/tensorboard/bar --port 6006
+
+```
+
+只看 baseline：
+
+```bash
+tensorboard --logdir out-shakespeare-char/tensorboard --port 6006
+```
+
+只看 BAR：
+
+```bash
+tensorboard --logdir out-shakespeare-char-bar/tensorboard --port 6006
+```
+
+## 10. 结果记录建议
 
 建议你边跑边填：
 
