@@ -67,6 +67,7 @@ n_embd = 768
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 use_block_attention_residuals = False
+use_full_attention_residuals = False
 attn_res_num_blocks = 3
 attn_res_use_rmsnorm = True
 # adamw optimizer
@@ -163,6 +164,7 @@ if os.path.exists(meta_path):
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
                   bias=bias, vocab_size=None, dropout=dropout,
                   use_block_attention_residuals=use_block_attention_residuals,
+                  use_full_attention_residuals=use_full_attention_residuals,
                   attn_res_num_blocks=attn_res_num_blocks,
                   attn_res_use_rmsnorm=attn_res_use_rmsnorm) # start with model_args from command line
 if init_from == 'scratch':
@@ -190,6 +192,7 @@ elif init_from == 'resume':
         'bias',
         'vocab_size',
         'use_block_attention_residuals',
+        'use_full_attention_residuals',
         'attn_res_num_blocks',
         'attn_res_use_rmsnorm',
     ]
@@ -210,14 +213,17 @@ elif init_from == 'resume':
     best_val_loss = checkpoint['best_val_loss']
 elif init_from.startswith('gpt2'):
     print(f"Initializing from OpenAI GPT-2 weights: {init_from}")
-    if use_block_attention_residuals:
-        raise ValueError("init_from='gpt2*' does not support use_block_attention_residuals=True; use scratch or resume instead.")
+    if use_block_attention_residuals or use_full_attention_residuals:
+        raise ValueError(
+            "init_from='gpt2*' does not support residual-attention variants; use scratch or resume instead."
+        )
     # initialize from OpenAI GPT-2 weights
     override_args = dict(dropout=dropout)
     model = GPT.from_pretrained(init_from, override_args)
     # read off the created config params, so we can store them into checkpoint correctly
     for k in ['n_layer', 'n_head', 'n_embd', 'block_size', 'bias', 'vocab_size',
-              'use_block_attention_residuals', 'attn_res_num_blocks', 'attn_res_use_rmsnorm']:
+              'use_block_attention_residuals', 'use_full_attention_residuals',
+              'attn_res_num_blocks', 'attn_res_use_rmsnorm']:
         model_args[k] = getattr(model.config, k)
 # crop down the model block size if desired, using model surgery
 if block_size < model.config.block_size:

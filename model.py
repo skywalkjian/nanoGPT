@@ -130,6 +130,7 @@ class Block(nn.Module):
         super().__init__()
         self.layer_idx = layer_idx
         self.use_block_attention_residuals = config.use_block_attention_residuals
+        self.use_full_attention_residuals = config.use_full_attention_residuals
         self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
         self.attn = CausalSelfAttention(config)
         self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
@@ -138,22 +139,62 @@ class Block(nn.Module):
             self.layers_per_block = config.n_layer // config.attn_res_num_blocks
             self.attn_res_agg = BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
             self.mlp_res_agg = BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
+        elif self.use_full_attention_residuals:
+            self.attn_res_agg = BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
+            self.mlp_res_agg = BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
 
     def _bar_norm(self, x):
         return x.detach().float().norm(dim=-1).mean().item()
 
     def forward(self, x, blocks=None, collect_bar_stats=False):
         if not self.use_block_attention_residuals:
-            x = x + self.attn(self.ln_1(x))
-            x = x + self.mlp(self.ln_2(x))
+            if not self.use_full_attention_residuals:
+                x = x + self.attn(self.ln_1(x))
+                x = x + self.mlp(self.ln_2(x))
+                if collect_bar_stats:
+                    stats = {
+                        'layer_idx': self.layer_idx,
+                        'mode': 'baseline',
+                        'output_norm': self._bar_norm(x),
+                    }
+                    return x, blocks, stats
+                return x
+
+            if blocks is None:
+                blocks = []
+
+            stats = {'layer_idx': self.layer_idx} if collect_bar_stats else None
             if collect_bar_stats:
-                stats = {
-                    'layer_idx': self.layer_idx,
-                    'mode': 'baseline',
-                    'output_norm': self._bar_norm(x),
-                }
-                return x, blocks, stats
-            return x
+                stats['input_norm'] = self._bar_norm(x)
+
+            if collect_bar_stats:
+                attn_hidden, attn_scores = self.attn_res_agg(blocks, x, return_scores=True)
+                stats['attn_scores'] = attn_scores.detach().float().cpu()
+                stats['attn_agg_norm'] = self._bar_norm(attn_hidden)
+                stats['attn_depth'] = attn_scores.size(0)
+            else:
+                attn_hidden = self.attn_res_agg(blocks, x)
+
+            x = x + self.attn(self.ln_1(attn_hidden))
+            if collect_bar_stats:
+                stats['post_attn_norm'] = self._bar_norm(x)
+
+            if collect_bar_stats:
+                mlp_hidden, mlp_scores = self.mlp_res_agg(blocks, x, return_scores=True)
+                stats['mlp_scores'] = mlp_scores.detach().float().cpu()
+                stats['mlp_agg_norm'] = self._bar_norm(mlp_hidden)
+                stats['mlp_depth'] = mlp_scores.size(0)
+            else:
+                mlp_hidden = self.mlp_res_agg(blocks, x)
+
+            x = x + self.mlp(self.ln_2(mlp_hidden))
+            blocks.append(x)
+            if collect_bar_stats:
+                stats['output_norm'] = self._bar_norm(x)
+                stats['num_history_states'] = len(blocks)
+                stats['mode'] = 'full_attention_residuals'
+
+            return x, blocks, stats
 
         if blocks is None:
             blocks = []
@@ -173,7 +214,7 @@ class Block(nn.Module):
 
         # layer 0 only sees the embedding input, so it should not be treated
         # as a completed historical block.
-        if self.layer_idx > 0 and self.layer_idx % self.layers_per_block == 0:
+        if self.layer_idx % self.layers_per_block == 0:
             blocks.append(partial_block)
             partial_block = None
 
@@ -208,6 +249,7 @@ class GPTConfig:
     dropout: float = 0.0
     bias: bool = True # True: bias in Linears and LayerNorms, like GPT-2. False: a bit better and faster
     use_block_attention_residuals: bool = False
+    use_full_attention_residuals: bool = False
     attn_res_num_blocks: int = 3
     attn_res_use_rmsnorm: bool = True
 
@@ -218,6 +260,8 @@ class GPT(nn.Module):
         assert config.vocab_size is not None
         assert config.block_size is not None
         self.config = config
+        if config.use_block_attention_residuals and config.use_full_attention_residuals:
+            raise ValueError("use_block_attention_residuals and use_full_attention_residuals are mutually exclusive")
         if config.use_block_attention_residuals and config.n_layer % config.attn_res_num_blocks != 0:
             raise ValueError(
                 f"n_layer={config.n_layer} must be divisible by attn_res_num_blocks={config.attn_res_num_blocks}"
@@ -290,6 +334,18 @@ class GPT(nn.Module):
                     'mode': 'bar',
                     'layers_per_block': self.config.n_layer // self.config.attn_res_num_blocks,
                     'attn_res_num_blocks': self.config.attn_res_num_blocks,
+                    'block_stats': block_stats,
+                }
+        elif self.config.use_full_attention_residuals:
+            blocks = []
+            block_stats = [] if return_bar_stats else None
+            for block in self.transformer.h:
+                x, blocks, stats = block(x, blocks=blocks, collect_bar_stats=return_bar_stats)
+                if return_bar_stats:
+                    block_stats.append(stats)
+            if return_bar_stats:
+                aux = {
+                    'mode': 'full_attention_residuals',
                     'block_stats': block_stats,
                 }
         else:
