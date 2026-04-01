@@ -89,6 +89,13 @@ device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps'
 dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 compile = True # use PyTorch 2.0 to compile the model to be faster
 use_tqdm = True # only used for single-card progress display
+seed = 1337
+residual_stats_log = False
+residual_stats_interval = 0
+residual_stats_split = 'val'
+residual_stats_batches = 1
+residual_stats_batch_size = 0
+residual_stats_seed = 1337
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
 exec(open('configurator.py').read()) # overrides from command line or config file
@@ -120,7 +127,10 @@ print(f"tokens per iteration will be: {tokens_per_iter:,}")
 
 if master_process:
     os.makedirs(out_dir, exist_ok=True)
-torch.manual_seed(1337 + seed_offset)
+torch.manual_seed(seed + seed_offset)
+np.random.seed(seed + seed_offset)
+if torch.cuda.is_available():
+    torch.cuda.manual_seed(seed + seed_offset)
 torch.backends.cuda.matmul.allow_tf32 = True # allow tf32 on matmul
 torch.backends.cudnn.allow_tf32 = True # allow tf32 on cudnn
 device_type = 'cuda' if 'cuda' in device else 'cpu' # for later use in torch.autocast
@@ -130,14 +140,15 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
-def get_batch(split):
+def get_batch(split, batch_size_override=None, generator=None):
     # We recreate np.memmap every batch to avoid a memory leak, as per
     # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
     if split == 'train':
         data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
     else:
         data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
+    effective_batch_size = batch_size if batch_size_override is None else batch_size_override
+    ix = torch.randint(len(data) - block_size, (effective_batch_size,), generator=generator)
     x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
     y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
     if device_type == 'cuda':
@@ -250,6 +261,15 @@ if compile:
 if ddp:
     model = DDP(model, device_ids=[ddp_local_rank])
 
+def unwrap_model(module):
+    while True:
+        if isinstance(module, DDP):
+            module = module.module
+        elif hasattr(module, '_orig_mod'):
+            module = module._orig_mod
+        else:
+            return module
+
 # helps estimate an arbitrarily accurate loss over either split using many batches
 @torch.no_grad()
 def estimate_loss(show_progress=False):
@@ -301,6 +321,17 @@ if tensorboard_log and master_process:
         tb_writer = SummaryWriter(log_dir=tb_log_dir)
         tb_writer.add_text('config', '\n'.join(f'{k}: {v}' for k, v in sorted(config.items())))
 
+if residual_stats_split not in {'train', 'val'}:
+    raise ValueError("residual_stats_split must be 'train' or 'val'")
+if residual_stats_batches <= 0:
+    raise ValueError("residual_stats_batches must be positive")
+if residual_stats_batch_size < 0:
+    raise ValueError("residual_stats_batch_size must be >= 0")
+
+residual_stats_enabled = residual_stats_log and master_process and tb_writer is not None
+if residual_stats_log and master_process and tb_writer is None:
+    print("WARNING: residual stats logging requires tensorboard_log=True and a working TensorBoard installation; skipping residual diagnostics.")
+
 tqdm_enabled = use_tqdm and not ddp and master_process
 train_pbar = None
 if tqdm_enabled and tqdm is not None:
@@ -314,11 +345,81 @@ def log_message(message):
     else:
         print(message)
 
+def score_entropy(scores):
+    if scores.size(0) <= 1:
+        return 0.0
+    probs = scores.clamp_min(1e-12)
+    entropy = -(probs * probs.log()).sum(dim=0)
+    return float(entropy.mean().item())
+
+def score_current_history_shares(scores):
+    current_share = float(scores[-1].mean().item())
+    history_share = float(scores[:-1].sum(dim=0).mean().item()) if scores.size(0) > 1 else 0.0
+    return current_share, history_share
+
+def should_log_residual_stats(step):
+    if not residual_stats_enabled:
+        return False
+    effective_interval = residual_stats_interval if residual_stats_interval > 0 else eval_interval
+    return step % effective_interval == 0
+
+@torch.no_grad()
+def log_residual_stats(step):
+    diagnostic_batch_size = residual_stats_batch_size or batch_size
+    diagnostic_rng = torch.Generator(device='cpu')
+    diagnostic_rng.manual_seed(residual_stats_seed)
+    metric_store = {}
+    losses = []
+
+    model.eval()
+    for _ in range(residual_stats_batches):
+        X_diag, Y_diag = get_batch(residual_stats_split, batch_size_override=diagnostic_batch_size, generator=diagnostic_rng)
+        with ctx:
+            _, loss, aux = model(X_diag, Y_diag, return_bar_stats=True)
+        losses.append(float(loss.item()))
+        for stats in aux['block_stats']:
+            layer_idx = stats['layer_idx']
+            layer_metrics = metric_store.setdefault(layer_idx, {})
+            for key in ['input_norm', 'attn_agg_norm', 'post_attn_norm', 'mlp_agg_norm', 'output_norm']:
+                if key in stats:
+                    layer_metrics.setdefault(key, []).append(float(stats[key]))
+            for score_key, prefix in [('attn_scores', 'attn'), ('mlp_scores', 'mlp')]:
+                scores = stats.get(score_key)
+                if scores is None:
+                    continue
+                entropy = score_entropy(scores)
+                current_share, history_share = score_current_history_shares(scores)
+                layer_metrics.setdefault(f'{prefix}_entropy', []).append(entropy)
+                layer_metrics.setdefault(f'{prefix}_current_share', []).append(current_share)
+                layer_metrics.setdefault(f'{prefix}_history_share', []).append(history_share)
+    model.train()
+
+    tb_writer.add_scalar('residual_stats/loss', float(np.mean(losses)), step)
+    tb_writer.add_text('residual_stats/source', f"split={residual_stats_split}, batches={residual_stats_batches}, batch_size={diagnostic_batch_size}", step)
+    for layer_idx in sorted(metric_store):
+        for key, values in metric_store[layer_idx].items():
+            tb_writer.add_scalar(f'residual_stats/layer_{layer_idx}/{key}', float(np.mean(values)), step)
+
+    raw_model = unwrap_model(model)
+    for layer_idx, block in enumerate(raw_model.transformer.h):
+        if not hasattr(block, 'attn_res_agg'):
+            continue
+        tb_writer.add_scalar(
+            f'residual_weights/layer_{layer_idx}/attn_res_agg_l2',
+            float(block.attn_res_agg.weight.detach().float().norm().item()),
+            step,
+        )
+        tb_writer.add_scalar(
+            f'residual_weights/layer_{layer_idx}/mlp_res_agg_l2',
+            float(block.mlp_res_agg.weight.detach().float().norm().item()),
+            step,
+        )
+
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
 local_iter_num = 0 # number of iterations in the lifetime of this process
-raw_model = model.module if ddp else model # unwrap DDP container if needed
+raw_model = unwrap_model(model)
 running_mfu = -1.0
 while True:
 
@@ -336,6 +437,8 @@ while True:
             tb_writer.add_scalar('eval/val_loss', losses['val'], iter_num)
             tb_writer.add_scalar('eval/best_val_loss', min(best_val_loss, losses['val']), iter_num)
             tb_writer.add_scalar('train/lr', lr, iter_num)
+        if should_log_residual_stats(iter_num):
+            log_residual_stats(iter_num)
         if wandb_log:
             wandb.log({
                 "iter": iter_num,

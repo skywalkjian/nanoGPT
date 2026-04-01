@@ -9,6 +9,7 @@ https://github.com/huggingface/transformers/blob/main/src/transformers/models/gp
 
 import math
 import inspect
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 import torch
@@ -41,19 +42,39 @@ class RMSNorm(nn.Module):
 
 class BlockAttnRes(nn.Module):
 
+    VALID_ANALYSIS_MODES = {'learned', 'uniform', 'current_only'}
+
     def __init__(self, hidden_size, use_rmsnorm=True):
         super().__init__()
         self.weight = nn.Parameter(torch.zeros(hidden_size))
         self.norm = RMSNorm(hidden_size) if use_rmsnorm else nn.Identity()
+        self.analysis_mode = 'learned'
+
+    def set_analysis_mode(self, mode=None):
+        mode = 'learned' if mode is None else mode
+        if mode not in self.VALID_ANALYSIS_MODES:
+            raise ValueError(f"Unsupported residual analysis mode: {mode}")
+        self.analysis_mode = mode
+
+    def _compute_scores(self, values):
+        mode = self.analysis_mode
+        if mode == 'uniform':
+            depth = values.size(0)
+            return torch.full(values.shape[:-1], 1.0 / depth, device=values.device, dtype=values.dtype)
+        if mode == 'current_only':
+            scores = torch.zeros(values.shape[:-1], device=values.device, dtype=values.dtype)
+            scores[-1] = 1.0
+            return scores
+        keys = self.norm(values)
+        logits = torch.einsum('d, n b t d -> n b t', self.weight, keys)
+        return F.softmax(logits, dim=0)
 
     def forward(self, blocks, partial_block, return_scores=False):
         if len(blocks) > 0:
             values = torch.stack(blocks + [partial_block], dim=0)
         else:
             values = partial_block.unsqueeze(0)
-        keys = self.norm(values)
-        logits = torch.einsum('d, n b t d -> n b t', self.weight, keys)
-        scores = F.softmax(logits, dim=0)
+        scores = self._compute_scores(values)
         hidden = torch.einsum('n b t, n b t d -> b t d', scores, values)
         if return_scores:
             return hidden, scores
@@ -234,6 +255,7 @@ class Block(nn.Module):
         mlp_out = self.mlp(self.ln_2(mlp_hidden))
         partial_block = partial_block + mlp_out
         if collect_bar_stats:
+            stats['mode'] = 'bar'
             stats['output_norm'] = self._bar_norm(partial_block)
             stats['num_committed_blocks'] = len(blocks)
 
@@ -311,7 +333,33 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def iter_residual_aggregators(self):
+        for block in self.transformer.h:
+            for name in ('attn_res_agg', 'mlp_res_agg'):
+                agg = getattr(block, name, None)
+                if agg is not None:
+                    yield agg
+
+    def set_residual_analysis_mode(self, mode=None):
+        normalized_mode = 'learned' if mode is None else mode
+        if normalized_mode not in BlockAttnRes.VALID_ANALYSIS_MODES:
+            raise ValueError(f"Unsupported residual analysis mode: {normalized_mode}")
+        for agg in self.iter_residual_aggregators():
+            agg.set_analysis_mode(normalized_mode)
+
+    @contextmanager
+    def use_residual_analysis_mode(self, mode):
+        aggregators = list(self.iter_residual_aggregators())
+        previous_modes = [agg.analysis_mode for agg in aggregators]
+        self.set_residual_analysis_mode(mode)
+        try:
+            yield self
+        finally:
+            for agg, previous_mode in zip(aggregators, previous_modes):
+                agg.set_analysis_mode(previous_mode)
+
     def forward(self, idx, targets=None, return_bar_stats=False):
+        # Kept for compatibility: this returns aux stats for baseline, BAR, and FAR.
         device = idx.device
         b, t = idx.size()
         assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
