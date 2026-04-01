@@ -1,0 +1,129 @@
+{
+  "peak_step": 600,
+  "peak_val_advantage": 0.13623714447021484,
+  "peak_train_advantage": 0.13600730895996094,
+  "sustained_flip_step": 2600,
+  "final_step": 5000,
+  "final_val_gap": -0.05650043487548828,
+  "final_train_gap": -0.06053972244262695,
+  "bar_best_val_step": 5000,
+  "bar_best_val": 4.258923530578613,
+  "baseline_best_val_step": 5000,
+  "baseline_best_val": 4.202423095703125,
+  "timeline": [
+    {
+      "step": 0,
+      "baseline_train": 10.9906644821167,
+      "bar_train": 10.987205505371094,
+      "baseline_val": 11.00284194946289,
+      "bar_val": 10.994341850280762,
+      "val_base_minus_bar": 0.008500099182128906
+    },
+    {
+      "step": 600,
+      "baseline_train": 5.72349214553833,
+      "bar_train": 5.587484836578369,
+      "baseline_val": 5.633758544921875,
+      "bar_val": 5.49752140045166,
+      "val_base_minus_bar": 0.13623714447021484
+    },
+    {
+      "step": 1000,
+      "baseline_train": 5.402491092681885,
+      "bar_train": 5.308900356292725,
+      "baseline_val": 5.297536849975586,
+      "bar_val": 5.217392921447754,
+      "val_base_minus_bar": 0.08014392852783203
+    },
+    {
+      "step": 2000,
+      "baseline_train": 4.814013957977295,
+      "bar_train": 4.7732062339782715,
+      "baseline_val": 4.789184093475342,
+      "bar_val": 4.7592902183532715,
+      "val_base_minus_bar": 0.029893875122070312
+    },
+    {
+      "step": 2400,
+      "baseline_train": 4.601945877075195,
+      "bar_train": 4.594304084777832,
+      "baseline_val": 4.569382667541504,
+      "bar_val": 4.559537410736084,
+      "val_base_minus_bar": 0.009845256805419922
+    },
+    {
+      "step": 2600,
+      "baseline_train": 4.601480484008789,
+      "bar_train": 4.593619346618652,
+      "baseline_val": 4.5892767906188965,
+      "bar_val": 4.595221519470215,
+      "val_base_minus_bar": -0.005944728851318359
+    },
+    {
+      "step": 3000,
+      "baseline_train": 4.45213508605957,
+      "bar_train": 4.459883689880371,
+      "baseline_val": 4.5591607093811035,
+      "bar_val": 4.575299263000488,
+      "val_base_minus_bar": -0.016138553619384766
+    },
+    {
+      "step": 4000,
+      "baseline_train": 4.337265968322754,
+      "bar_train": 4.377127647399902,
+      "baseline_val": 4.34209680557251,
+      "bar_val": 4.385515213012695,
+      "val_base_minus_bar": -0.04341840744018555
+    },
+    {
+      "step": 5000,
+      "baseline_train": 4.183640480041504,
+      "bar_train": 4.244180202484131,
+      "baseline_val": 4.202423095703125,
+      "bar_val": 4.258923530578613,
+      "val_base_minus_bar": -0.05650043487548828
+    }
+  ],
+  "bar_analysis": {
+    "classification": "aggregator_affects_loss",
+    "message": "Residual aggregators materially change loss relative to at least one ablation mode.",
+    "losses": {
+      "learned": 4.330205470323563,
+      "uniform": 10.028818488121033,
+      "current_only": 16.24119234085083
+    },
+    "loss_gaps": {
+      "uniform_minus_learned": 5.69861301779747,
+      "current_only_minus_learned": 11.910986870527267
+    },
+    "weight_metrics": {
+      "has_residual_aggregators": true,
+      "max_l2_norm": 0.9253168106079102
+    },
+    "score_metrics": {
+      "mean_normalized_entropy": 0.4509293378725903,
+      "mean_current_share": 0.48933608044171706,
+      "mean_history_share": 0.5106639198881263
+    },
+    "loss_mode_rows": [
+      {
+        "evaluation_mode": "learned",
+        "mean_loss": 4.330205470323563,
+        "delta_vs_learned": 0.0
+      },
+      {
+        "evaluation_mode": "uniform",
+        "mean_loss": 10.028818488121033,
+        "delta_vs_learned": 5.69861301779747
+      },
+      {
+        "evaluation_mode": "current_only",
+        "mean_loss": 16.24119234085083,
+        "delta_vs_learned": 11.910986870527267
+      }
+    ]
+  },
+  "baseline_event_file": "out-gpt2-124m-pilot-baseline/tensorboard/gpt2-124m-pilot-baseline/events.out.tfevents.1775051242.71d2c1de1d04.111170.0",
+  "bar_event_file": "out-gpt2-124m-pilot-bar/tensorboard/gpt2-124m-pilot-bar/events.out.tfevents.1775046301.71d2c1de1d04.43914.0",
+  "bar_analysis_dir": "out-gpt2-124m-pilot-bar/bar_analysis"
+}

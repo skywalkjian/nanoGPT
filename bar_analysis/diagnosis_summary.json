@@ -1,0 +1,29 @@
+{
+  "checkpoint_mode": "bar",
+  "mode_label": "BAR",
+  "classification": "aggregator_affects_loss",
+  "message": "Residual aggregators materially change loss relative to at least one ablation mode.",
+  "losses": {
+    "learned": 4.330205470323563,
+    "uniform": 10.028818488121033,
+    "current_only": 16.24119234085083
+  },
+  "loss_gaps": {
+    "uniform_minus_learned": 5.69861301779747,
+    "current_only_minus_learned": 11.910986870527267
+  },
+  "weight_metrics": {
+    "has_residual_aggregators": true,
+    "max_l2_norm": 0.9253168106079102
+  },
+  "score_metrics": {
+    "mean_normalized_entropy": 0.4509293378725903,
+    "mean_current_share": 0.48933608044171706,
+    "mean_history_share": 0.5106639198881263
+  },
+  "thresholds": {
+    "loss_epsilon": 0.0005,
+    "near_zero_l2_norm": 0.01,
+    "nearly_uniform_entropy": 0.98
+  }
+}
