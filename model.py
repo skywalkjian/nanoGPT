@@ -296,6 +296,11 @@ class GPT(nn.Module):
             h = nn.ModuleList([Block(config, layer_idx=i) for i in range(config.n_layer)]),
             ln_f = LayerNorm(config.n_embd, bias=config.bias),
         ))
+        self.bar_output_agg = (
+            BlockAttnRes(config.n_embd, use_rmsnorm=config.attn_res_use_rmsnorm)
+            if config.use_block_attention_residuals
+            else None
+        )
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
         # with weight tying when using torch.compile() some warnings get generated:
         # "UserWarning: functional_call was passed multiple values for tied weights.
@@ -339,6 +344,8 @@ class GPT(nn.Module):
                 agg = getattr(block, name, None)
                 if agg is not None:
                     yield agg
+        if self.bar_output_agg is not None:
+            yield self.bar_output_agg
 
     def set_residual_analysis_mode(self, mode=None):
         normalized_mode = 'learned' if mode is None else mode
@@ -378,11 +385,19 @@ class GPT(nn.Module):
                 if return_bar_stats:
                     block_stats.append(stats)
             if return_bar_stats:
+                x, output_scores = self.bar_output_agg(blocks, x, return_scores=True)
+            else:
+                # BAR needs one last aggregation so the model output can attend
+                # over all completed block representations, including the last one.
+                x = self.bar_output_agg(blocks, x)
+            if return_bar_stats:
                 aux = {
                     'mode': 'bar',
                     'layers_per_block': self.config.n_layer // self.config.attn_res_num_blocks,
                     'attn_res_num_blocks': self.config.attn_res_num_blocks,
                     'block_stats': block_stats,
+                    'output_scores': output_scores.detach().float().cpu(),
+                    'output_depth': output_scores.size(0),
                 }
         elif self.config.use_full_attention_residuals:
             blocks = []

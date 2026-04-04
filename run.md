@@ -7,6 +7,73 @@
 ## 0.data/env 准备
 运行 `python data/shakespeare_char/prepare.py`
 python -m pip install tensorboard matplotlib tqdm tiktoken datasets
+
+### OpenWebText (OWT) 下载与预处理
+
+`nanoGPT` 在大数据集配置里使用的数据集名是 `openwebtext`，对应目录是：
+
+```text
+data/openwebtext
+```
+
+先安装依赖：
+
+```bash
+python -m pip install datasets tiktoken tqdm numpy
+```
+
+然后在仓库根目录执行：
+
+```bash
+python data/openwebtext/prepare.py
+```
+
+这个脚本会做两件事：
+
+1. 通过 Hugging Face `datasets` 下载 `openwebtext`
+2. 在 `data/openwebtext/` 下生成训练用二进制文件
+
+生成完成后，核心产物是：
+
+```text
+data/openwebtext/train.bin
+data/openwebtext/val.bin
+```
+
+脚本中的已知体积大致是：
+
+```text
+Hugging Face cache: 约 54GB
+train.bin: 约 17GB
+val.bin: 约 8.5MB
+```
+
+所以建议至少预留 `80GB+` 可用磁盘空间。
+
+如果你想把 Hugging Face 缓存放到别的盘，可以先指定：
+
+```bash
+export HF_HOME=/your/bigger/disk/hf
+python data/openwebtext/prepare.py
+```
+
+下载和预处理结束后，可以简单检查：
+
+```bash
+ls -lh data/openwebtext/train.bin data/openwebtext/val.bin
+```
+
+确认 `train.bin` / `val.bin` 已生成后，就可以直接跑 OpenWebText 124M pilot：
+
+```bash
+python train.py config/train_gpt2_124m_pilot.py
+```
+
+如果你想保留日志：
+
+```bash
+python train.py config/train_gpt2_124m_pilot.py | tee logs/train_owt_124m_pilot.log
+```
 ## 1. 推荐目录约定
 
 baseline 输出目录：
