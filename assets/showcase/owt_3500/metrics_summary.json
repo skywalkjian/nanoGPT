@@ -1,0 +1,119 @@
+{
+  "steady_state_window": {
+    "start": 3000,
+    "end": 3490
+  },
+  "baseline": {
+    "final_step": 3500,
+    "final_eval_train_loss": 4.460448741912842,
+    "final_eval_val_loss": 4.39776611328125,
+    "best_val_step": 3500,
+    "best_val_loss": 4.39776611328125,
+    "steady_state_iter_ms_median": 136.45816040039062,
+    "steady_state_iter_ms_mean": 340.8164984130859,
+    "steady_state_mfu_median": 28.06424903869629,
+    "steady_state_mfu_mean": 27.944007110595702
+  },
+  "bar": {
+    "final_step": 3500,
+    "final_eval_train_loss": 4.36255407333374,
+    "final_eval_val_loss": 4.29149055480957,
+    "best_val_step": 3500,
+    "best_val_loss": 4.29149055480957,
+    "steady_state_iter_ms_median": 207.9315185546875,
+    "steady_state_iter_ms_mean": 521.0765310668945,
+    "steady_state_mfu_median": 18.278048515319824,
+    "steady_state_mfu_mean": 18.142164688110352
+  },
+  "peak_step": 1800,
+  "peak_val_advantage": 0.13050270080566406,
+  "peak_train_advantage": 0.11280202865600586,
+  "sustained_flip_step": null,
+  "final_step": 3500,
+  "final_train_gap": 0.09789466857910156,
+  "final_val_gap": 0.10627555847167969,
+  "timeline": [
+    {
+      "step": 0,
+      "baseline_eval_train": 10.994012832641602,
+      "bar_eval_train": 10.993552207946777,
+      "baseline_eval_val": 11.006921768188477,
+      "bar_eval_val": 11.006525039672852,
+      "val_base_minus_bar": 0.000396728515625
+    },
+    {
+      "step": 300,
+      "baseline_eval_train": 6.178849697113037,
+      "bar_eval_train": 6.120078086853027,
+      "baseline_eval_val": 6.142883777618408,
+      "bar_eval_val": 6.085244178771973,
+      "val_base_minus_bar": 0.05763959884643555
+    },
+    {
+      "step": 500,
+      "baseline_eval_train": 5.7804975509643555,
+      "bar_eval_train": 5.684861660003662,
+      "baseline_eval_val": 5.817939758300781,
+      "bar_eval_val": 5.726579666137695,
+      "val_base_minus_bar": 0.09136009216308594
+    },
+    {
+      "step": 1000,
+      "baseline_eval_train": 5.284498691558838,
+      "bar_eval_train": 5.2132110595703125,
+      "baseline_eval_val": 5.233111381530762,
+      "bar_eval_val": 5.159452438354492,
+      "val_base_minus_bar": 0.07365894317626953
+    },
+    {
+      "step": 1500,
+      "baseline_eval_train": 4.97801399230957,
+      "bar_eval_train": 4.869422912597656,
+      "baseline_eval_val": 5.042973041534424,
+      "bar_eval_val": 4.936063289642334,
+      "val_base_minus_bar": 0.10690975189208984
+    },
+    {
+      "step": 1800,
+      "baseline_eval_train": 4.891144275665283,
+      "bar_eval_train": 4.778342247009277,
+      "baseline_eval_val": 4.859902381896973,
+      "bar_eval_val": 4.729399681091309,
+      "val_base_minus_bar": 0.13050270080566406
+    },
+    {
+      "step": 2000,
+      "baseline_eval_train": 4.743925094604492,
+      "bar_eval_train": 4.621358394622803,
+      "baseline_eval_val": 4.757624626159668,
+      "bar_eval_val": 4.646856307983398,
+      "val_base_minus_bar": 0.11076831817626953
+    },
+    {
+      "step": 2500,
+      "baseline_eval_train": 4.562817096710205,
+      "bar_eval_train": 4.451895713806152,
+      "baseline_eval_val": 4.567181587219238,
+      "bar_eval_val": 4.4576215744018555,
+      "val_base_minus_bar": 0.10956001281738281
+    },
+    {
+      "step": 3000,
+      "baseline_eval_train": 4.472611427307129,
+      "bar_eval_train": 4.35683536529541,
+      "baseline_eval_val": 4.476613998413086,
+      "bar_eval_val": 4.367144584655762,
+      "val_base_minus_bar": 0.10946941375732422
+    },
+    {
+      "step": 3500,
+      "baseline_eval_train": 4.460448741912842,
+      "bar_eval_train": 4.36255407333374,
+      "baseline_eval_val": 4.39776611328125,
+      "bar_eval_val": 4.29149055480957,
+      "val_base_minus_bar": 0.10627555847167969
+    }
+  ],
+  "baseline_event_file": "out-gpt2-124m-3500-baseline/tensorboard/gpt2-124m-3500-baseline/events.out.tfevents.1775319885.afc24363140f.98835.0",
+  "bar_event_file": "out-gpt2-124m-3500-bar/tensorboard/gpt2-124m-3500-bar/events.out.tfevents.1775320685.afc24363140f.112890.0"
+}
